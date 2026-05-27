@@ -1,17 +1,19 @@
 html, body, #root {
   margin: 0;
   padding: 0;
-  width: 100%;
-  min-height: 100vh;
+  width: 100vw;
+  min-height: 100dvh;
   background: #000;
-}
-
-body {
   overflow-x: hidden;
 }
 
-.app {
-  width: 100%;
-  min-height: 100vh;
-  background: #050505;
+body {
+  position: fixed;
+  inset: 0;
+}
+
+#root, .app {
+  width: 100vw;
+  min-height: 100dvh;
+  background: #000;
 }

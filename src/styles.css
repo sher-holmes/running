@@ -8,12 +8,20 @@ html, body, #root {
 }
 
 body {
-  position: fixed;
-  inset: 0;
+  overflow-x: hidden;
+  background: #000;
 }
 
 #root, .app {
   width: 100vw;
   min-height: 100dvh;
   background: #000;
+}
+* {
+  box-sizing: border-box;
+}
+
+.app {
+  width: 100%;
+  min-height: 100dvh;
 }

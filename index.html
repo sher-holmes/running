@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <title>訓練打卡</title>
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #root { height: 100%; }
+    body { background: #0a0a0a; overscroll-behavior: none; font-family: 'Noto Sans TC', 'PingFang TC', sans-serif; }
+    ::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script>
+const { useState, useEffect, useRef } = React;
+
+const SCHEDULE = [
+  { day: "一", workout: "恢復 Zone2", distance: "6~8km", type: "easy" },
+  { day: "二", workout: "品質課（tempo/interval）", distance: "8~10km", type: "quality" },
+  { day: "三", workout: "休息 / 重訓 / 游泳", distance: null, type: "rest" },
+  { day: "四", workout: "Zone2", distance: "8~10km", type: "easy" },
+  { day: "五", workout: "恢復跑 + strides", distance: "5~6km", type: "recovery" },
+  { day: "六", workout: "LSD 長距離", distance: "14~18km", type: "long" },
+  { day: "日", workout: "單車 / 登山 / 完全休息", distance: null, type: "rest" },
+];
+
+const TYPE_COLORS = {
+  easy:     { bg: "#1a2e1a", accent: "#4ade80", text: "#86efac" },
+  quality:  { bg: "#2e1a1a", accent: "#f87171", text: "#fca5a5" },
+  rest:     { bg: "#1a1a2e", accent: "#818cf8", text: "#a5b4fc" },
+  recovery: { bg: "#2e2a1a", accent: "#fbbf24", text: "#fde68a" },
+  long:     { bg: "#1a2a2e", accent: "#22d3ee", text: "#67e8f9" },
+};
+
+const MONTH_NAMES = ["一月","二月","三月","四月","五月","六月","七月","八月","九月","十月","十一月","十二月"];
+const RANGE = 7;
+const EVENTS_KEY = "race_events";
+
+function dateKey(date) {
+  return date.getFullYear()+"-"+String(date.getMonth()+1).padStart(2,"0")+"-"+String(date.getDate()).padStart(2,"0");
+}
+function storageKey(date) { return "checkin_"+dateKey(date); }
+function getDateFromKey(dk) { const [y,m,d]=dk.split("-").map(Number); return new Date(y,m-1,d); }
+function dateByOffset(o) { const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+o); return d; }
+function scheduleIdx(date) { const dow=date.getDay(); return dow===0?6:dow-1; }
+function getDaysInMonth(y,m) { return new Date(y,m+1,0).getDate(); }
+function getFirstDayOfMonth(y,m) { const d=new Date(y,m,1).getDay(); return d===0?6:d-1; }
+function getMonthCheckins(year,month) {
+  const dim=getDaysInMonth(year,month); let total=0; const days={};
+  for(let d=1;d<=dim;d++){
+    const date=new Date(year,month,d);
+    try{ const data=JSON.parse(localStorage.getItem(storageKey(date)));
+      if(data&&data.done){days[d]=data;if(data.km)total+=parseFloat(data.km)||0;} }catch{}
+  }
+  return {total,days};
+}
+function loadEvents(){ try{return JSON.parse(localStorage.getItem(EVENTS_KEY))||[];}catch{return[];} }
+function saveEvents(list){ localStorage.setItem(EVENTS_KEY,JSON.stringify(list)); }
+function daysDiff(dateStr,today){ const t=new Date(dateStr);t.setHours(0,0,0,0);return Math.round((t-today)/86400000); }
+
+function App() {
+  const today=new Date(); today.setHours(0,0,0,0);
+  const todayKey=dateKey(today);
+  const currentYear=today.getFullYear();
+  const currentMonth=today.getMonth();
+  const isLastDay=today.getDate()===getDaysInMonth(currentYear,currentMonth);
+
+  const [checkins,setCheckins]=useState(()=>{
+    const obj={};
+    for(let o=-RANGE;o<=RANGE;o++){const d=dateByOffset(o);const k=dateKey(d);
+      try{obj[k]=JSON.parse(localStorage.getItem(storageKey(d)))||null;}catch{obj[k]=null;}}
+    return obj;
+  });
+
+  const listRef=useRef(null);
+  const todayRef=useRef(null);
+  useEffect(()=>{ if(todayRef.current)todayRef.current.scrollIntoView({block:"center"}); },[]);
+
+  const [modal,setModal]=useState(null);
+  const [note,setNote]=useState("");
+  const [km,setKm]=useState("");
+  const [animKey,setAnimKey]=useState(null);
+  const [showCalendar,setShowCalendar]=useState(false);
+  const [calMonth,setCalMonth]=useState({year:currentYear,month:currentMonth});
+  const [events,setEvents]=useState(loadEvents);
+  const [showAddEvent,setShowAddEvent]=useState(false);
+  const [newEventName,setNewEventName]=useState("");
+  const [newEventDate,setNewEventDate]=useState("");
+
+  const upcomingEvents=[...events]
+    .map(e=>({...e,diff:daysDiff(e.date,today)}))
+    .filter(e=>e.diff>=0)
+    .sort((a,b)=>a.diff-b.diff);
+
+  function addEvent(){
+    if(!newEventName.trim()||!newEventDate)return;
+    const list=[...events,{id:Date.now().toString(),name:newEventName.trim(),date:newEventDate}];
+    saveEvents(list);setEvents(list);setNewEventName("");setNewEventDate("");setShowAddEvent(false);
+  }
+  function removeEvent(id){ const list=events.filter(e=>e.id!==id);saveEvents(list);setEvents(list); }
+
+  const monthKm=(()=>{
+    let t=0;
+    Object.entries(checkins).forEach(([dk,v])=>{
+      if(!v||!v.done||!v.km)return;
+      const d=getDateFromKey(dk);
+      if(d.getFullYear()===currentYear&&d.getMonth()===currentMonth)t+=parseFloat(v.km)||0;
+    });
+    return Math.round(t*10)/10;
+  })();
+
+  const settledKey="month_total_"+currentYear+"_"+currentMonth;
+  const [settledTotal]=useState(()=>{try{return JSON.parse(localStorage.getItem(settledKey))||null;}catch{return null;}});
+  useEffect(()=>{
+    if(isLastDay){const{total}=getMonthCheckins(currentYear,currentMonth);localStorage.setItem(settledKey,JSON.stringify(Math.round(total*10)/10));}
+  },[checkins]);
+
+  const weekDoneCount=(()=>{
+    let count=0;const dow=today.getDay();const mo=dow===0?-6:1-dow;
+    for(let i=0;i<7;i++){const d=dateByOffset(mo+i);if(checkins[dateKey(d)]&&checkins[dateKey(d)].done)count++;}
+    return count;
+  })();
+
+  function openModal(dk){
+    const date=getDateFromKey(dk);
+    setModal({dk,date,si:scheduleIdx(date)});
+    setNote(checkins[dk]&&checkins[dk].note||"");
+    setKm(checkins[dk]&&checkins[dk].km||"");
+  }
+  function handleCheckin(){
+    const{dk,date}=modal;
+    const data={done:true,km,note,ts:Date.now()};
+    localStorage.setItem(storageKey(date),JSON.stringify(data));
+    setCheckins(prev=>({...prev,[dk]:data}));
+    setAnimKey(dk);setTimeout(()=>setAnimKey(null),600);setModal(null);
+  }
+  function handleUncheck(dk){
+    localStorage.removeItem(storageKey(getDateFromKey(dk)));
+    setCheckins(prev=>({...prev,[dk]:null}));
+  }
+
+  const calDaysInMonth=getDaysInMonth(calMonth.year,calMonth.month);
+  const calFirstDay=getFirstDayOfMonth(calMonth.year,calMonth.month);
+  const{days:calDayData}=getMonthCheckins(calMonth.year,calMonth.month);
+  const calMonthKm=Math.round(Object.values(calDayData).reduce((s,d)=>s+(parseFloat(d&&d.km)||0),0)*10)/10;
+  const calGrid=[...Array(calFirstDay).fill(null),...Array.from({length:calDaysInMonth},(_,i)=>i+1)];
+  const eventDateSet=new Set(events.map(e=>e.date));
+
+  const dayItems=[];
+  for(let o=-RANGE;o<=RANGE;o++){const date=dateByOffset(o);date.setHours(0,0,0,0);dayItems.push({date,dk:dateKey(date),offset:o});}
+
+  const e=React.createElement;
+
+  return e("div",{style:{height:"100vh",display:"flex",flexDirection:"column",background:"#0a0a0a",color:"#e5e5e5",overflow:"hidden"}},
+
+    // HEADER
+    e("div",{style:{flexShrink:0,padding:"44px 20px 16px",borderBottom:"1px solid #1f1f1f",background:"#0a0a0a",zIndex:20}},
+      e("div",{style:{fontSize:10,letterSpacing:4,color:"#444",textTransform:"uppercase",marginBottom:8}},"Training Log"),
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}},
+        e("div",{style:{fontSize:20,fontWeight:800,letterSpacing:-0.5,lineHeight:1}},"你的最佳週結構"),
+        e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+          e("div",{style:{textAlign:"right"}},
+            e("div",{style:{display:"flex",alignItems:"baseline",gap:2,justifyContent:"flex-end"}},
+              e("span",{style:{fontSize:20,fontWeight:900,color:"#22d3ee",lineHeight:1}},isLastDay&&settledTotal!==null?settledTotal:monthKm),
+              e("span",{style:{fontSize:9,color:"#22d3ee88",fontWeight:700}},"km")
+            ),
+            e("div",{style:{fontSize:9,color:"#444",letterSpacing:1}},isLastDay&&settledTotal!==null?"本月結算":"本月累積")
+          ),
+          e("div",{style:{width:1,height:28,background:"#222"}}),
+          e("div",{style:{textAlign:"right"}},
+            e("div",{style:{fontSize:20,fontWeight:900,color:"#4ade80",lineHeight:1}},weekDoneCount),
+            e("div",{style:{fontSize:9,color:"#555",letterSpacing:1}},"/ 7 本週")
+          ),
+          e("button",{onClick:()=>{setCalMonth({year:currentYear,month:currentMonth});setShowCalendar(true);},
+            style:{width:34,height:34,borderRadius:9,background:"#151515",border:"1px solid #2a2a2a",color:"#777",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"📅")
+        )
+      ),
+      e("div",{style:{marginTop:12,height:2,background:"#1a1a1a",borderRadius:1}},
+        e("div",{style:{height:"100%",borderRadius:1,background:"linear-gradient(90deg,#4ade80,#22d3ee)",width:(weekDoneCount/7*100)+"%",transition:"width 0.5s cubic-bezier(0.34,1.56,0.64,1)"}})
+      )
+    ),
+
+    // LIST
+    e("div",{ref:listRef,style:{flex:1,overflowY:"auto",padding:"8px 14px 40px"}},
+      dayItems.map(({date,dk,offset})=>{
+        const si=scheduleIdx(date);
+        const item=SCHEDULE[si];
+        const colors=TYPE_COLORS[item.type];
+        const isToday=dk===todayKey;
+        const isPast=date<today;
+        const checkin=checkins[dk];
+        const isAnim=animKey===dk;
+        const showMonthLabel=date.getDate()===1||offset===-RANGE;
+
+        return e("div",{key:dk},
+          showMonthLabel&&e("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"18px 4px 10px"}},
+            e("div",{style:{fontSize:11,fontWeight:800,color:"#333",letterSpacing:3}},date.getFullYear()+" · "+MONTH_NAMES[date.getMonth()]),
+            e("div",{style:{flex:1,height:1,background:"#1a1a1a"}})
+          ),
+          e("div",{
+            ref:isToday?todayRef:null,
+            onClick:()=>checkin&&checkin.done?handleUncheck(dk):openModal(dk),
+            style:{marginBottom:8,borderRadius:14,background:checkin&&checkin.done?colors.bg:"#111",
+              border:"1px solid "+(isToday?colors.accent:checkin&&checkin.done?colors.accent+"44":"#1a1a1a"),
+              padding:"14px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,
+              position:"relative",overflow:"hidden",
+              transform:isAnim?"scale(0.97)":"scale(1)",transition:"transform 0.15s ease, opacity 0.2s ease",
+              opacity:isPast&&!(checkin&&checkin.done)&&!isToday?0.45:1}},
+            isToday&&e("div",{style:{position:"absolute",inset:0,pointerEvents:"none",background:"radial-gradient(ellipse at 0% 50%, "+colors.accent+"15 0%, transparent 55%)"}}),
+            e("div",{style:{width:46,minWidth:46,height:46,borderRadius:11,
+              background:isToday?colors.accent:checkin&&checkin.done?colors.accent+"40":"#161616",
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+              e("div",{style:{fontSize:15,fontWeight:800,lineHeight:1,color:isToday?"#000":checkin&&checkin.done?"#fff":"#444"}},item.day),
+              e("div",{style:{fontSize:9,color:isToday?"#0008":checkin&&checkin.done?"#ffffffaa":"#555",marginTop:2}},(date.getMonth()+1)+"/"+date.getDate())
+            ),
+            e("div",{style:{flex:1,minWidth:0}},
+              e("div",{style:{fontSize:14,fontWeight:700,color:checkin&&checkin.done?"#e5e5e5":isToday?"#e5e5e5":"#555",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},item.workout),
+              item.distance&&e("div",{style:{fontSize:11,marginTop:2,color:checkin&&checkin.km?colors.accent:isPast&&!(checkin&&checkin.done)?"#444":"#666"}},
+                checkin&&checkin.km?checkin.km+" km 完成":item.distance),
+              checkin&&checkin.note&&e("div",{style:{fontSize:10,color:"#888",marginTop:2,fontStyle:"italic"}},'"'+checkin.note+'"')
+            ),
+            e("div",{style:{width:26,height:26,borderRadius:"50%",flexShrink:0,
+              border:"2px solid "+(checkin&&checkin.done?colors.accent:"#252525"),
+              background:checkin&&checkin.done?colors.accent:"transparent",
+              display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.25s ease"}},
+              checkin&&checkin.done&&e("span",{style:{fontSize:12,fontWeight:800,color:item.type==="rest"?"#fff":"#000"}},"✓")
+            )
+          )
+        );
+      })
+    ),
+
+    // CHECKIN MODAL
+    modal&&e("div",{onClick:ev=>ev.target===ev.currentTarget&&setModal(null),
+      style:{position:"fixed",inset:0,zIndex:100,background:"#000000cc",display:"flex",alignItems:"flex-end",backdropFilter:"blur(6px)"}},
+      e("div",{style:{width:"100%",maxWidth:500,margin:"0 auto",background:"#141414",borderRadius:"22px 22px 0 0",padding:"20px 20px 44px",border:"1px solid #222"}},
+        (()=>{
+          const item=SCHEDULE[modal.si];
+          const colors=TYPE_COLORS[item.type];
+          return[
+            e("div",{key:"h",style:{width:36,height:4,background:"#2a2a2a",borderRadius:2,margin:"0 auto 18px"}}),
+            e("div",{key:"d",style:{fontSize:11,color:colors.accent,letterSpacing:3,marginBottom:4}},item.day+"曜日 · "+(modal.date.getMonth()+1)+"/"+modal.date.getDate()),
+            e("div",{key:"w",style:{fontSize:19,fontWeight:800,marginBottom:18}},item.workout),
+            item.distance&&e("div",{key:"km",style:{marginBottom:12}},
+              e("label",{style:{fontSize:10,color:"#555",display:"block",marginBottom:6,letterSpacing:2}},"實際距離 (KM)"),
+              e("input",{type:"number",value:km,onChange:ev=>setKm(ev.target.value),placeholder:item.distance,
+                style:{width:"100%",padding:"12px 14px",background:"#1a1a1a",border:"1px solid "+colors.accent+"44",borderRadius:10,color:"#e5e5e5",fontSize:16,outline:"none",boxSizing:"border-box"}})
+            ),
+            e("div",{key:"n",style:{marginBottom:18}},
+              e("label",{style:{fontSize:10,color:"#555",display:"block",marginBottom:6,letterSpacing:2}},"備註（選填）"),
+              e("textarea",{value:note,onChange:ev=>setNote(ev.target.value),placeholder:"感覺如何？",rows:2,
+                style:{width:"100%",padding:"12px 14px",background:"#1a1a1a",border:"1px solid #1f1f1f",borderRadius:10,color:"#e5e5e5",fontSize:14,outline:"none",resize:"none",boxSizing:"border-box",fontFamily:"inherit"}})
+            ),
+            e("button",{key:"ok",onClick:handleCheckin,style:{width:"100%",padding:"14px",background:colors.accent,border:"none",borderRadius:12,fontSize:15,fontWeight:800,color:"#000",cursor:"pointer",letterSpacing:1}},"✓ 完成打卡"),
+            e("button",{key:"cancel",onClick:()=>setModal(null),style:{width:"100%",padding:"11px",background:"transparent",border:"none",borderRadius:12,fontSize:13,color:"#555",cursor:"pointer",marginTop:4}},"取消")
+          ];
+        })()
+      )
+    ),
+
+    // CALENDAR MODAL
+    showCalendar&&e("div",{onClick:ev=>ev.target===ev.currentTarget&&setShowCalendar(false),
+      style:{position:"fixed",inset:0,zIndex:200,background:"#000000ee",display:"flex",alignItems:"flex-end",backdropFilter:"blur(10px)"}},
+      e("div",{style:{width:"100%",maxWidth:500,margin:"0 auto",background:"#0f0f0f",borderRadius:"24px 24px 0 0",border:"1px solid #1f1f1f",paddingBottom:44,maxHeight:"92vh",overflowY:"auto"}},
+        e("div",{style:{width:36,height:4,background:"#2a2a2a",borderRadius:2,margin:"16px auto 0"}}),
+
+        // Race countdown header
+        e("div",{style:{padding:"20px 18px 0"}},
+          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
+            e("div",{style:{fontSize:10,color:"#444",letterSpacing:3}},"🏁 賽事倒數"),
+            e("button",{onClick:()=>setShowAddEvent(v=>!v),
+              style:{fontSize:11,color:"#555",background:"#161616",border:"1px solid #222",borderRadius:8,padding:"4px 10px",cursor:"pointer"}},
+              showAddEvent?"收起":"+ 新增賽事")
+          ),
+          showAddEvent&&e("div",{style:{background:"#111",border:"1px solid #1f1f1f",borderRadius:12,padding:"14px",marginBottom:12,overflow:"hidden"}},
+            e("input",{value:newEventName,onChange:ev=>setNewEventName(ev.target.value),placeholder:"賽事名稱（如：台北馬拉松）",
+              style:{width:"100%",padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:8,color:"#e5e5e5",fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:8,fontFamily:"inherit"}}),
+            e("div",{style:{position:"relative",marginBottom:10}},
+              e("input",{type:"date",value:newEventDate,onChange:ev=>setNewEventDate(ev.target.value),
+                style:{width:"100%",maxWidth:"100%",padding:"12px 14px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:8,color:newEventDate?"#e5e5e5":"#555",fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit",colorScheme:"dark",display:"block",WebkitAppearance:"none",appearance:"none",minHeight:44}}),
+              !newEventDate&&e("div",{style:{position:"absolute",inset:0,padding:"12px 14px",fontSize:14,color:"#555",pointerEvents:"none",display:"flex",alignItems:"center"}},"選擇日期")
+            ),
+            e("button",{onClick:addEvent,style:{width:"100%",padding:"10px",background:"#f87171",border:"none",borderRadius:8,fontSize:13,fontWeight:800,color:"#000",cursor:"pointer"}},"確認新增")
+          ),
+          upcomingEvents.length===0&&e("div",{style:{fontSize:12,color:"#2a2a2a",marginBottom:14,textAlign:"center",padding:"10px 0"}},"尚未設定賽事")
+        ),
+
+        // Scrollable event cards
+        upcomingEvents.length>0&&e("div",{style:{overflowX:"auto",display:"flex",gap:10,padding:"0 18px 16px",scrollSnapType:"x mandatory",WebkitOverflowScrolling:"touch",msOverflowStyle:"none",scrollbarWidth:"none"}},
+          upcomingEvents.map((ev,idx)=>{
+            const palette=[{accent:"#22d3ee",bg:"#0e2a30"},{accent:"#a78bfa",bg:"#1e1a2e"},{accent:"#fb923c",bg:"#2a1a0e"}];
+            const{accent,bg}=palette[idx%palette.length];
+            return e("div",{key:ev.id,style:{flexShrink:0,width:"calc(33vw - 12px)",minWidth:100,maxWidth:150,scrollSnapAlign:"start",background:bg,border:"1px solid "+accent+"44",borderRadius:12,padding:"12px",position:"relative"}},
+              e("button",{onClick:()=>removeEvent(ev.id),style:{position:"absolute",top:6,right:8,background:"none",border:"none",color:"#555",fontSize:13,cursor:"pointer",lineHeight:1}},"×"),
+              e("div",{style:{fontSize:22,fontWeight:900,color:accent,lineHeight:1}},ev.diff),
+              e("div",{style:{fontSize:9,color:accent+"99",marginTop:1}},"天後"),
+              e("div",{style:{fontSize:11,color:"#ccc",marginTop:6,fontWeight:600,lineHeight:1.3}},ev.name),
+              e("div",{style:{fontSize:9,color:"#555",marginTop:3}},ev.date.replace(/-/g,"/"))
+            );
+          })
+        ),
+
+        // Month nav
+        e("div",{style:{height:1,background:"#161616",margin:"0 18px"}}),
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 16px 0"}},
+          e("button",{onClick:()=>{const d=new Date(calMonth.year,calMonth.month-1,1);setCalMonth({year:d.getFullYear(),month:d.getMonth()});},style:{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",padding:"4px 10px"}},"‹"),
+          e("div",{style:{textAlign:"center"}},
+            e("div",{style:{fontSize:17,fontWeight:800}},calMonth.year+" · "+MONTH_NAMES[calMonth.month]),
+            e("div",{style:{fontSize:13,color:"#22d3ee",marginTop:3,fontWeight:700}},calMonthKm+" km"+(calMonth.year===currentYear&&calMonth.month===currentMonth&&isLastDay?" · 已結算 ✓":""))
+          ),
+          e("button",{onClick:()=>{const d=new Date(calMonth.year,calMonth.month+1,1);setCalMonth({year:d.getFullYear(),month:d.getMonth()});},style:{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",padding:"4px 10px"}},"›")
+        ),
+
+        // Weekday headers
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,padding:"14px 14px 6px",textAlign:"center"}},
+          ["一","二","三","四","五","六","日"].map(d=>e("div",{key:d,style:{fontSize:9,color:"#333",paddingBottom:2}},d))
+        ),
+
+        // Calendar grid
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,padding:"0 14px"}},
+          calGrid.map((day,i)=>{
+            if(!day)return e("div",{key:"e"+i});
+            const thisDate=new Date(calMonth.year,calMonth.month,day);
+            const thisDK=dateKey(thisDate);
+            const isT=thisDK===todayKey;
+            const data=calDayData[day];
+            const hasDone=!!(data&&data.done);
+            const c=TYPE_COLORS[SCHEDULE[scheduleIdx(thisDate)].type];
+            const isRaceDay=eventDateSet.has(thisDK);
+            return e("div",{key:day,style:{aspectRatio:"1",borderRadius:9,
+              background:hasDone?c.bg:isT?"#181818":"transparent",
+              border:"1px solid "+(isRaceDay?"#f87171aa":isT?"#2a2a2a":hasDone?c.accent+"55":"transparent"),
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}},
+              hasDone&&e("div",{style:{position:"absolute",inset:0,background:"radial-gradient(circle, "+c.accent+"1a 0%, transparent 70%)"}}),
+              isRaceDay&&e("div",{style:{position:"absolute",top:2,right:2,fontSize:7,lineHeight:1}},"🏁"),
+              e("div",{style:{fontSize:12,fontWeight:hasDone?700:400,color:isT?"#fff":hasDone?c.text:"#444",lineHeight:1,zIndex:1}},day),
+              hasDone&&e("div",{style:{fontSize:data.km?7:8,color:c.accent,marginTop:1,fontWeight:800,zIndex:1}},data.km?data.km+"k":"✓"),
+              isT&&!hasDone&&e("div",{style:{width:3,height:3,borderRadius:"50%",background:"#4ade80",marginTop:2}})
+            );
+          })
+        ),
+
+        // Legend
+        e("div",{style:{display:"flex",gap:8,padding:"14px 16px 0",flexWrap:"wrap"}},
+          Object.entries(TYPE_COLORS).map(([type,c])=>{
+            const labels={easy:"輕鬆跑",quality:"品質課",rest:"休息日",recovery:"恢復跑",long:"長距離"};
+            return e("div",{key:type,style:{display:"flex",alignItems:"center",gap:4}},
+              e("div",{style:{width:7,height:7,borderRadius:2,background:c.accent+"99",border:"1px solid "+c.accent}}),
+              e("span",{style:{fontSize:9,color:"#383838"}},labels[type])
+            );
+          })
+        ),
+
+        e("button",{onClick:()=>setShowCalendar(false),style:{display:"block",margin:"18px auto 0",padding:"9px 30px",background:"#161616",border:"1px solid #222",borderRadius:18,color:"#555",cursor:"pointer",fontSize:12}},"關閉")
+      )
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  </script>
+</body>
+</html>
